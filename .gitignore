@@ -1,0 +1,7 @@
+config.json
+*.db
+*.db-wal
+*.db-shm
+*.log
+__pycache__/
+.DS_Store

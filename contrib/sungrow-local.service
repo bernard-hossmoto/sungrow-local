@@ -1,0 +1,15 @@
+[Unit]
+Description=sungrow-local, local dashboard for Sungrow SH inverters
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/sungrow-local
+ExecStart=/usr/bin/python3 /opt/sungrow-local/sungrow_local.py --config /opt/sungrow-local/config.json
+Restart=on-failure
+RestartSec=20
+
+[Install]
+WantedBy=multi-user.target

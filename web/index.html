@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sungrow-local</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="theme-color" content="#070b16">
+<style>
+:root{
+  --bg:#070b16; --rand:#1b2740;
+  --text:#e8eefc; --muted:#8798b8;
+  --sun:#fbbf24; --batt:#34d399; --grid:#a78bfa; --house:#22d3ee; --red:#f87171;
+}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%}
+body{
+  background:var(--bg); color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  overflow-x:hidden;
+}
+body::before,body::after{content:"";position:fixed;border-radius:50%;filter:blur(120px);opacity:.5;pointer-events:none;z-index:0}
+body::before{width:620px;height:620px;left:-180px;top:-220px;background:radial-gradient(circle,#1d4ed8 0%,transparent 70%)}
+body::after{width:720px;height:720px;right:-240px;bottom:-280px;background:radial-gradient(circle,#7c3aed 0%,transparent 70%)}
+.wrap{position:relative;z-index:1;max-width:1180px;margin:0 auto;padding:22px 16px 40px}
+
+header{
+  display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:16px 20px;border-radius:16px;margin-bottom:20px;
+  background:rgba(255,255,255,.04);border:1px solid var(--rand);backdrop-filter:blur(14px);
+}
+header h1{
+  margin:0;font-size:20px;font-weight:700;letter-spacing:.2px;
+  background:linear-gradient(90deg,var(--house),var(--grid),var(--sun));
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+header .sub{color:var(--muted);font-size:14px}
+header .right{margin-left:auto;font-size:13px;color:var(--muted)}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--batt);box-shadow:0 0 10px var(--batt);display:inline-block;margin-right:7px}
+.dot.dead{background:var(--red);box-shadow:0 0 10px var(--red)}
+
+.stage{position:relative;border-radius:20px;overflow:hidden;background:linear-gradient(180deg,#0a1020 0%,#0c1424 60%,#0a1526 100%);border:1px solid var(--rand)}
+svg.scene{display:block;width:100%;height:auto}
+
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:14px;margin-top:18px}
+.tile{position:relative;padding:16px 18px;border-radius:16px;background:rgba(255,255,255,.04);border:1px solid var(--rand);backdrop-filter:blur(10px);overflow:hidden}
+.tile::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--acc)}
+.tile .label{font-size:12.5px;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
+.tile .value{font-size:30px;font-weight:700;margin-top:6px;font-variant-numeric:tabular-nums;color:var(--acc)}
+.tile .value small{font-size:15px;font-weight:500;color:var(--muted);margin-left:4px}
+.tile .note{font-size:12.5px;color:var(--muted);margin-top:4px}
+.tile[data-k=pv]{--acc:var(--sun)} .tile[data-k=batt]{--acc:var(--batt)}
+.tile[data-k=house]{--acc:var(--house)} .tile[data-k=grid]{--acc:var(--grid)}
+.bar{height:6px;border-radius:3px;background:rgba(255,255,255,.08);margin-top:10px;overflow:hidden}
+.bar i{display:block;height:100%;border-radius:3px;background:var(--acc);transition:width .6s ease}
+
+.card{position:relative;margin-top:14px;padding:14px 16px 8px;border-radius:16px;background:rgba(255,255,255,.04);border:1px solid var(--rand);backdrop-filter:blur(10px)}
+.chead{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:4px}
+.ctitle{font-size:12.5px;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
+.legend{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted)}
+.legend i{width:9px;height:9px;border-radius:3px;display:inline-block;margin-left:9px}
+.cinfo{margin-left:auto;font-size:12.5px;color:var(--muted)}
+#daychart{display:block;width:100%;height:auto}
+.tip{position:absolute;pointer-events:none;opacity:0;transition:opacity .12s;background:#0a1222e8;border:1px solid var(--rand);border-radius:10px;padding:8px 11px;font-size:12.5px;line-height:1.5;white-space:nowrap;transform:translate(-50%,-115%);z-index:3}
+.tip b{font-weight:600}
+
+.table{overflow-x:auto;margin:2px -4px 6px}
+.table table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+.table th,.table td{padding:9px 10px;text-align:right;white-space:nowrap}
+.table thead th{font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);font-weight:500;border-bottom:1px solid var(--rand)}
+.table tbody th{text-align:left;color:var(--muted);font-size:12.5px;font-weight:500}
+.table tbody td{font-size:15px}
+.table tbody tr+tr td,.table tbody tr+tr th{border-top:1px solid rgba(255,255,255,.05)}
+.table td.exp{color:var(--grid)} .table td.money{color:var(--batt);font-weight:600}
+.table td small{color:var(--muted);font-size:11.5px;margin-left:3px;font-weight:400}
+
+.foot{display:flex;gap:18px;flex-wrap:wrap;margin-top:16px;font-size:12.5px;color:var(--muted)}
+.foot b{color:var(--text);font-weight:600}
+.flow{stroke-dasharray:5 11;animation:run 1.1s linear infinite}
+@keyframes run{to{stroke-dashoffset:-16}}
+.off{opacity:.14}
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+@media (max-width:640px){.tile .value{font-size:26px}.cinfo{margin-left:0}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1 id="plant">sungrow-local</h1>
+  <span class="sub" id="sub"></span>
+  <span class="right"><span class="dot" id="led"></span><span id="status"></span></span>
+</header>
+
+<div class="stage">
+<svg class="scene" viewBox="0 0 1180 600" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Energy flows">
+  <defs>
+    <linearGradient id="pvGlass" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1e3a8a"/><stop offset="0.5" stop-color="#2563eb"/><stop offset="1" stop-color="#172554"/>
+    </linearGradient>
+    <radialGradient id="sunlight"><stop offset="0" stop-color="#fbbf24" stop-opacity=".5"/><stop offset="1" stop-color="#fbbf24" stop-opacity="0"/></radialGradient>
+    <filter id="glow"><feGaussianBlur stdDeviation="3.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>
+  <g id="sun"><circle cx="190" cy="96" r="96" fill="url(#sunlight)"/><circle cx="190" cy="96" r="25" fill="#fbbf24"/></g>
+  <g id="scene"></g>
+  <g id="flows" filter="url(#glow)"></g>
+  <g id="pills"></g>
+</svg>
+</div>
+
+<div class="tiles">
+  <div class="tile" data-k="pv"><div class="label" data-t="production"></div><div class="value" id="v_pv">–</div><div class="note" id="n_pv"></div><div class="bar"><i id="b_pv"></i></div></div>
+  <div class="tile" data-k="batt"><div class="label" data-t="storage"></div><div class="value" id="v_soc">–</div><div class="note" id="n_batt"></div><div class="bar"><i id="b_soc"></i></div></div>
+  <div class="tile" data-k="house"><div class="label" data-t="consumption"></div><div class="value" id="v_house">–</div><div class="note" data-t="whole_house"></div><div class="bar"><i id="b_house"></i></div></div>
+  <div class="tile" data-k="grid"><div class="label" data-t="grid"></div><div class="value" id="v_grid">–</div><div class="note" id="n_grid"></div><div class="bar"><i id="b_grid"></i></div></div>
+</div>
+
+<div class="card" id="historycard">
+  <div class="chead">
+    <span class="ctitle" data-t="history"></span>
+    <span class="legend"><i style="background:var(--sun)"></i><span data-t="generation"></span><i style="background:var(--house)"></i><span data-t="consumption"></span></span>
+    <span class="cinfo" id="day_info"></span>
+  </div>
+  <svg id="daychart" viewBox="0 0 1140 230" role="img">
+    <defs>
+      <linearGradient id="gPv" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fbbf24" stop-opacity=".40"/><stop offset="1" stop-color="#fbbf24" stop-opacity="0"/></linearGradient>
+      <linearGradient id="gHouse" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#22d3ee" stop-opacity=".26"/><stop offset="1" stop-color="#22d3ee" stop-opacity="0"/></linearGradient>
+    </defs>
+    <g id="d_grid"></g>
+    <path id="d_pv_a" fill="url(#gPv)"/><path id="d_house_a" fill="url(#gHouse)"/>
+    <path id="d_house_l" fill="none" stroke="var(--house)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    <path id="d_pv_l" fill="none" stroke="var(--sun)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    <g id="d_axis"></g>
+    <g id="d_cursor" style="display:none">
+      <line id="d_cl" y1="24" y2="196" stroke="#8798b8" stroke-width="1" stroke-dasharray="3 4"/>
+      <circle id="d_cp" r="4.5" fill="var(--sun)" stroke="#070b16" stroke-width="2"/>
+      <circle id="d_ch" r="4.5" fill="var(--house)" stroke="#070b16" stroke-width="2"/>
+    </g>
+    <rect id="d_hit" x="54" y="18" width="1072" height="182" fill="transparent"/>
+  </svg>
+  <div class="tip" id="tip"></div>
+</div>
+
+<div class="card">
+  <div class="chead"><span class="ctitle" data-t="balance"></span><span class="cinfo" id="bal_info"></span></div>
+  <div class="table"><table>
+    <thead><tr><th></th><th data-t="produced"></th><th data-t="direct"></th><th data-t="from_storage"></th><th data-t="exported"></th><th data-t="imported"></th><th data-t="used"></th><th data-t="autarky"></th><th class="rev" data-t="revenue"></th></tr></thead>
+    <tbody>
+      <tr><th data-t="today"></th><td id="t_pv"></td><td id="t_direct"></td><td id="t_discharged"></td><td class="exp" id="t_exported"></td><td id="t_imported"></td><td id="t_consumption"></td><td id="t_autarky"></td><td class="money rev" id="t_revenue"></td></tr>
+      <tr><th data-t="total"></th><td id="g_pv"></td><td id="g_direct"></td><td id="g_discharged"></td><td class="exp" id="g_exported"></td><td id="g_imported"></td><td id="g_consumption"></td><td id="g_autarky"></td><td class="money rev" id="g_revenue"></td></tr>
+    </tbody>
+  </table></div>
+</div>
+
+<div class="foot">
+  <span><span data-t="battery"></span> <b id="f_bv">–</b> · <b id="f_bt">–</b></span>
+  <span data-t="footer"></span>
+</div>
+
+</div>
+<script src="scene.js"></script>
+<script src="app.js"></script>
+<script src="periods.js"></script>
+</body>
+</html>

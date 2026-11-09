@@ -1,0 +1,23 @@
+{
+  "inverter_host": "192.168.1.100",
+  "inverter_port": 502,
+  "unit_id": 1,
+
+  "http_host": "0.0.0.0",
+  "http_port": 8787,
+
+  "plant_name": "My PV system",
+  "peak_power_kw": 10.0,
+  "feed_in_tariff": 0.08,
+  "currency": "€",
+  "language": "en",
+
+  "poll_seconds": 10,
+  "request_pause": 0.35,
+  "keep_days": 400,
+  "database": "sungrow-local.db",
+
+  "basic_auth": null,
+  "lan_without_login": true,
+  "trust_cloudflare_access": false
+}
