@@ -77,6 +77,8 @@ vollständige Liste steht im [englischen README](README.md#configuration), die w
 | `feed_in_tariff` | Vergütung je eingespeister kWh, `0` blendet den Erlös aus |
 | `language` | `de` oder `en` |
 | `basic_auth` | `"benutzer:passwort"`, wenn eine Anmeldung nötig sein soll |
+| `lan_without_login` | mit `basic_auth`: andere Geräte im Heimnetz, die sich direkt verbinden, brauchen keine Anmeldung (Standard `false`) |
+| `cloudflare_access` | Team-Domain und AUD-Tag einer Cloudflare-Access-Anwendung, siehe unten |
 
 ## Gut zu wissen
 
@@ -96,12 +98,35 @@ vollständige Liste steht im [englischen README](README.md#configuration), die w
 ## Zugriff von unterwegs
 
 Das Dashboard hat ab Werk keine Anmeldung und ist fürs Heimnetz gedacht. Bitte keinen Port
-am Router freigeben. Für unterwegs gibt es das eigene VPN, oder:
+am Router freigeben. Anfragen, die über einen Reverse Proxy oder Tunnel kommen (erkennbar an
+`X-Forwarded-For`, `X-Real-IP`, `Forwarded` oder `CF-Connecting-IP`), werden abgewiesen,
+solange keine Anmeldung eingerichtet ist. Ein vergessener Tunnel legt das Dashboard also
+nicht offen.
 
-- `basic_auth` setzen und das Dashboard hinter einen Reverse Proxy mit HTTPS stellen, oder
-- über einen Cloudflare Tunnel mit Cloudflare-Access-Richtlinie veröffentlichen und
-  `trust_cloudflare_access` auf `true` setzen. Anfragen, die über einen Cloudflare-Tunnel
-  kommen, werden abgewiesen, außer Access hat sie geprüft oder `basic_auth` ist gesetzt.
+Für unterwegs gibt es drei Wege:
+
+- **Das eigene VPN.** Nichts einzurichten.
+- **Anmeldung plus Reverse Proxy.** `basic_auth` auf `"benutzer:passwort"` setzen und das
+  Dashboard hinter einen Reverse Proxy mit HTTPS stellen. Dann braucht jede Anfrage die
+  Anmeldung, auch daheim. Sollen Geräte im Heimnetz ohne auskommen, `lan_without_login` auf
+  `true` setzen. Die Ausnahme gilt nur für direkte Verbindungen von anderen Geräten, nie für
+  Anfragen vom selben Rechner oder über einen Proxy. Läuft der Proxy auf einem anderen
+  Rechner und schickt kein `X-Forwarded-For`, `lan_without_login` aus lassen.
+- **Cloudflare Tunnel mit Cloudflare Access.** Für den Hostnamen eine Access-Anwendung
+  anlegen und Team-Domain sowie den AUD-Tag der Anwendung eintragen (in den Einstellungen
+  der Access-Anwendung als *Application Audience (AUD) Tag*):
+  ```json
+  "cloudflare_access": {
+    "team_domain": "deinteam.cloudflareaccess.com",
+    "audience": "<AUD-Tag deiner Access-Anwendung>"
+  }
+  ```
+  sungrow-local prüft dann das signierte Token, das Access jeder Anfrage mitgibt: Signatur
+  gegen die öffentlichen Schlüssel deines Teams, Zielgruppe, Aussteller und Ablaufzeit.
+  `audience` darf auch eine Liste sein, wenn mehrere Access-Anwendungen zum selben
+  Dashboard führen.
+
+Wie Anfragen geprüft werden und wie man Probleme meldet: [SECURITY.md](SECURITY.md).
 
 ## Die Cloud aussperren
 

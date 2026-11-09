@@ -18,6 +18,6 @@
   "database": "sungrow-local.db",
 
   "basic_auth": null,
-  "lan_without_login": true,
-  "trust_cloudflare_access": false
+  "lan_without_login": false,
+  "cloudflare_access": null
 }

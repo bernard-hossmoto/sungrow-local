@@ -10,8 +10,8 @@ small SQLite history and serves a web dashboard plus a JSON API.
 
 Standard library only, Python 3.8 or newer. The program never writes a register.
 """
-import argparse, base64, hmac, http.server, ipaddress, json, math, os, random
-import socket, socketserver, sqlite3, struct, sys, threading, time
+import argparse, base64, hashlib, hmac, http.server, ipaddress, json, math, os, random
+import socket, socketserver, sqlite3, struct, sys, threading, time, urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(HERE, "web")
@@ -33,8 +33,8 @@ DEFAULTS = {
     "currency": "€",
     "language": "en",            # en or de
     "basic_auth": None,          # "user:password" to require a login
-    "lan_without_login": True,   # private addresses skip basic_auth
-    "trust_cloudflare_access": False,
+    "lan_without_login": False,  # true: direct requests from the LAN skip basic_auth
+    "cloudflare_access": None,   # {"team_domain": "...cloudflareaccess.com", "audience": "AUD tag"}
 }
 
 # ---------------------------------------------------------------- configuration
@@ -47,6 +47,12 @@ def load_config(path):
     elif path and path != os.path.join(HERE, "config.json"):
         sys.exit("config file not found: %s" % path)
     cfg["poll_seconds"] = max(5, int(cfg["poll_seconds"]))
+    if "trust_cloudflare_access" in cfg:
+        sys.exit("trust_cloudflare_access was replaced by cloudflare_access "
+                 "(team_domain and audience), see README")
+    ca = cfg.get("cloudflare_access")
+    if ca and not (isinstance(ca, dict) and ca.get("team_domain") and ca.get("audience")):
+        sys.exit("cloudflare_access needs team_domain and audience, see README")
     if not os.path.isabs(cfg["database"]):
         cfg["database"] = os.path.join(HERE, cfg["database"])
     return cfg
@@ -338,15 +344,83 @@ class Collector(threading.Thread):
 
 # ---------------------------------------------------------------- web
 
-def is_private(addr):
+def is_lan(addr):
+    """Private address of another device. Loopback does not count: a reverse proxy on the
+    same machine would otherwise make every visitor look local."""
     try:
         ip = ipaddress.ip_address(addr)
-        return ip.is_private or ip.is_loopback
+        return ip.is_private and not ip.is_loopback
     except ValueError:
         return False
 
+# ---------------------------------------------------------------- Cloudflare Access
 
-def make_handler(cfg, store, collector):
+SHA256_DIGEST_INFO = bytes.fromhex("3031300d060960864801650304020105000420")
+
+
+def b64url(text):
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+class AccessVerifier(object):
+    """Verifies the Cf-Access-Jwt-Assertion token that Cloudflare Access adds to every
+    request it lets through: RS256 signature against the team's public keys, audience,
+    issuer and expiry. Standard library only."""
+
+    def __init__(self, team_domain, audience):
+        self.team = team_domain.strip().replace("https://", "").rstrip("/")
+        self.audience = set(audience if isinstance(audience, list) else [audience])
+        self.keys, self.loaded = {}, 0.0
+        self.lock = threading.Lock()
+
+    def fetch_keys(self):
+        url = "https://%s/cdn-cgi/access/certs" % self.team
+        with urllib.request.urlopen(url, timeout=10) as r:
+            data = json.load(r)
+        return {k["kid"]: (int.from_bytes(b64url(k["n"]), "big"), int.from_bytes(b64url(k["e"]), "big"))
+                for k in data.get("keys", []) if k.get("kty") == "RSA"}
+
+    def key(self, kid):
+        with self.lock:
+            now = time.time()
+            # refresh hourly, and for an unknown key id at most once a minute
+            if now - self.loaded > 3600 or (kid not in self.keys and now - self.loaded > 60):
+                try:
+                    self.keys, self.loaded = self.fetch_keys(), now
+                except Exception:
+                    self.loaded = now - 3600 + 60   # retry in a minute, keep old keys
+            return self.keys.get(kid)
+
+    def verify(self, token):
+        try:
+            h64, p64, s64 = token.split(".")
+            header, payload = json.loads(b64url(h64)), json.loads(b64url(p64))
+            if header.get("alg") != "RS256":
+                return False
+            key = self.key(header.get("kid"))
+            if not key:
+                return False
+            n, e = key
+            size = (n.bit_length() + 7) // 8
+            sig = b64url(s64)
+            if len(sig) != size:
+                return False
+            em = pow(int.from_bytes(sig, "big"), e, n).to_bytes(size, "big")
+            t = SHA256_DIGEST_INFO + hashlib.sha256((h64 + "." + p64).encode("ascii")).digest()
+            if not hmac.compare_digest(em, b"\x00\x01" + b"\xff" * (size - len(t) - 3) + b"\x00" + t):
+                return False
+            aud = payload.get("aud")
+            if not self.audience & set(aud if isinstance(aud, list) else [aud]):
+                return False
+            if payload.get("iss") != "https://" + self.team:
+                return False
+            now = time.time()
+            return payload.get("exp", 0) > now - 30 and payload.get("nbf", 0) < now + 30
+        except Exception:
+            return False
+
+
+def make_handler(cfg, store, collector, access=None):
     public = {k: cfg[k] for k in ("plant_name", "peak_power_kw", "feed_in_tariff", "currency", "language")}
 
     class Handler(http.server.SimpleHTTPRequestHandler):
@@ -373,23 +447,29 @@ def make_handler(cfg, store, collector):
             self.end_headers()
             self.wfile.write(raw)
 
+        def _proxied(self):
+            return any(self.headers.get(h) for h in
+                       ("CF-Connecting-IP", "X-Forwarded-For", "X-Real-IP", "Forwarded"))
+
         def _allowed(self):
             """Rules, in this order:
-            1. Through Cloudflare Access (if trusted): allowed, Access checked the visitor.
-            2. Through any Cloudflare tunnel without basic_auth: refused.
-            3. Local network (lan_without_login): allowed.
-            4. basic_auth set: valid login required. Not set: allowed."""
-            tunneled = bool(self.headers.get("CF-Connecting-IP"))
-            if tunneled and cfg["trust_cloudflare_access"] and self.headers.get("Cf-Access-Jwt-Assertion"):
+            1. A valid Cloudflare Access token (if cloudflare_access is set): allowed.
+            2. No basic_auth: direct requests are allowed, anything that came through a
+               proxy or tunnel is refused, so a forgotten tunnel never exposes the dashboard.
+            3. lan_without_login and a direct request from another device in the LAN: allowed.
+            4. Otherwise a valid basic_auth login is required."""
+            proxied = self._proxied()
+            token = self.headers.get("Cf-Access-Jwt-Assertion")
+            if access and token and access.verify(token):
                 return True
             login = cfg.get("basic_auth")
-            if tunneled and not login:
-                self._send(403, b"Refused: request came through a tunnel and no login is configured.\n",
+            if not login:
+                if not proxied:
+                    return True
+                self._send(403, b"Refused: request came through a proxy or tunnel and no login is configured.\n",
                            "text/plain; charset=utf-8")
                 return False
-            if not tunneled and cfg["lan_without_login"] and is_private(self.client_address[0]):
-                return True
-            if not login:
+            if cfg["lan_without_login"] and not proxied and is_lan(self.client_address[0]):
                 return True
             expected = "Basic " + base64.b64encode(login.encode("utf-8")).decode("ascii")
             if hmac.compare_digest(self.headers.get("Authorization", ""), expected):
@@ -453,11 +533,17 @@ def main():
     else:
         source = lambda: read_inverter(cfg)
 
+    ca = cfg.get("cloudflare_access")
+    access = AccessVerifier(ca["team_domain"], ca["audience"]) if ca else None
     collector = Collector(cfg, store, source)
     collector.start()
     print("sungrow-local on http://%s:%d/  (%s)" % (
         cfg["http_host"], cfg["http_port"], "demo mode" if args.demo else "inverter " + cfg["inverter_host"]))
-    Server((cfg["http_host"], int(cfg["http_port"])), make_handler(cfg, store, collector)).serve_forever()
+    print("access: %s%s" % (
+        "login required" + (", LAN without login" if cfg["lan_without_login"] else "") if cfg["basic_auth"]
+        else "open for direct requests, proxied requests refused",
+        ", Cloudflare Access for " + access.team if access else ""))
+    Server((cfg["http_host"], int(cfg["http_port"])), make_handler(cfg, store, collector, access)).serve_forever()
 
 
 if __name__ == "__main__":

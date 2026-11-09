@@ -86,8 +86,8 @@ All settings live in `config.json`. Everything you leave out keeps its default.
 | `keep_days` | `400` | how long the minute values are kept |
 | `database` | `sungrow-local.db` | SQLite file for the history |
 | `basic_auth` | `null` | `"user:password"` to require a login |
-| `lan_without_login` | `true` | private addresses do not need the login |
-| `trust_cloudflare_access` | `false` | see "Access from outside" |
+| `lan_without_login` | `false` | with `basic_auth`: other devices in the LAN that connect directly need no login |
+| `cloudflare_access` | `null` | team domain and AUD tag of a Cloudflare Access application, see "Access from outside" |
 
 ## API
 
@@ -116,13 +116,34 @@ The dashboard is built on a small JSON API that you can use for your own tools:
 ## Access from outside
 
 The dashboard has no login by default and is meant for your home network. Do not forward
-the port on your router. For access on the road you can use your VPN, or:
+the port on your router. Requests that arrive through a reverse proxy or a tunnel
+(recognised by `X-Forwarded-For`, `X-Real-IP`, `Forwarded` or `CF-Connecting-IP`) are
+refused as long as no login is configured, so a forgotten tunnel does not expose the
+dashboard.
 
-- set `basic_auth` to `"user:password"` and put the dashboard behind a reverse proxy with
-  HTTPS, or
-- publish it through a Cloudflare Tunnel with a Cloudflare Access policy and set
-  `trust_cloudflare_access` to `true`. Requests that come through a Cloudflare tunnel are
-  refused unless Access has checked them or `basic_auth` is set.
+For access on the road there are three ways:
+
+- **Your VPN.** Nothing to configure.
+- **Login plus reverse proxy.** Set `basic_auth` to `"user:password"` and put the dashboard
+  behind a reverse proxy with HTTPS. Every request then needs the login, also at home. If
+  devices in your LAN may skip it, set `lan_without_login` to `true`. That exception only
+  applies to direct connections from other devices, never to requests from the same
+  machine or through a proxy. If your proxy runs on another machine and does not send
+  `X-Forwarded-For`, leave `lan_without_login` off.
+- **Cloudflare Tunnel with Cloudflare Access.** Create an Access application for the
+  hostname and enter your team domain and the application's AUD tag (shown as
+  *Application Audience (AUD) Tag* in the settings of the Access application):
+  ```json
+  "cloudflare_access": {
+    "team_domain": "yourteam.cloudflareaccess.com",
+    "audience": "<AUD tag of your Access application>"
+  }
+  ```
+  sungrow-local then checks the signed token that Access adds to every request: signature
+  against your team's public keys, audience, issuer and expiry. `audience` may also be a
+  list, if several Access applications lead to the same dashboard.
+
+Details on how requests are checked and how to report a problem: [SECURITY.md](SECURITY.md).
 
 ## Blocking the cloud
 
