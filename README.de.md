@@ -17,7 +17,9 @@ sehen, was die Anlage macht. Genau das macht sungrow-local, und nichts darüber 
 - **Eine Python-Datei**, nur Standardbibliothek, Python 3.8 oder neuer. Läuft auf einem
   alten Mac, einem Raspberry Pi, einem NAS oder jedem Linux-Rechner.
 - **Nur lesend.** Es schreibt nie ein Modbus-Register und kann daher keine Einstellung am
-  Wechselrichter verändern.
+  Wechselrichter verändern. Das gilt für dieses Programm, nicht für den Port, den es
+  braucht: Modbus TCP am WiNet-S hat keine Anmeldung, den Dongle deshalb vom übrigen Netz
+  abschirmen, siehe [WiNet-S abschotten](docs/block-cloud.de.md#winet-s-abschotten).
 - **Live-Ansicht** mit animierten Energieflüssen zwischen Dach, Speicher, Haus und Netz.
 - **Verlauf** für den Tag (Kurve in 5-Minuten-Schritten) und je Woche, Monat und Jahr.
 - **Energiebilanz** für heute und gesamt: erzeugt, direkt verbraucht, aus dem Speicher,
@@ -76,9 +78,21 @@ vollständige Liste steht im [englischen README](README.md#configuration), die w
 | `peak_power_kw` | Spitzenleistung der Anlage in kWp |
 | `feed_in_tariff` | Vergütung je eingespeister kWh, `0` blendet den Erlös aus |
 | `language` | `de` oder `en` |
-| `basic_auth` | `"benutzer:passwort"`, wenn eine Anmeldung nötig sein soll |
+| `basic_auth` | `"benutzer:passwort"` (Passwort mindestens 8 Zeichen) oder eine gehashte Anmeldung, siehe unten |
 | `lan_without_login` | mit `basic_auth`: andere Geräte im Heimnetz, die sich direkt verbinden, brauchen keine Anmeldung (Standard `false`) |
 | `cloudflare_access` | Team-Domain und AUD-Tag einer Cloudflare-Access-Anwendung, siehe unten |
+| `allowed_hosts` | Hostnamen, auf die das Dashboard außer IP-Adressen, `localhost` und dem eigenen Rechnernamen antwortet; nötig hinter Reverse Proxy oder Tunnel |
+| `trusted_proxies` | Adressen oder Netze (`"192.168.1.5"`, `"10.0.0.0/24"`), deren Verbindungen immer als über einen Proxy gekommen gelten |
+
+Die Einstellungen werden beim Start geprüft. Ein vertippter Schlüssel, ein falscher Typ
+(`"false"` in Anführungszeichen, `"8787"` als Text) oder ein zu kurzes Passwort beenden das
+Programm mit einer Meldung, die die Einstellung nennt. Schlüssel, die mit `_` beginnen,
+werden übergangen und taugen als Kommentar.
+
+**Gehashtes Passwort.** Statt des Passworts im Klartext kann `config.json` einen Hash
+enthalten. `python3 sungrow_local.py --hash-password` fragt Benutzer und Passwort ab und
+gibt die Zeile für `config.json` aus. So oder so: Steht eine Anmeldung in `config.json`, die
+Datei nur für dich lesbar machen, `chmod 600 config.json`.
 
 ## Gut zu wissen
 
@@ -94,14 +108,23 @@ vollständige Liste steht im [englischen README](README.md#configuration), die w
 - Die Tageswerte kommen aus den Zählern des Wechselrichters und werden ab dem Tag
   gespeichert, an dem sungrow-local zum ersten Mal läuft. Ältere Werte gibt es nur in der
   Cloud.
+- Messungen mit unmöglichen Werten (Ladestand über 100 %, PV-Leistung weit über der
+  Spitzenleistung) werden nicht gespeichert, und das Dashboard zeigt die Verbindung als
+  verloren, wenn drei Abfragen lang keine Messung kam.
 
 ## Zugriff von unterwegs
 
-Das Dashboard hat ab Werk keine Anmeldung und ist fürs Heimnetz gedacht. Bitte keinen Port
-am Router freigeben. Anfragen, die über einen Reverse Proxy oder Tunnel kommen (erkennbar an
-`X-Forwarded-For`, `X-Real-IP`, `Forwarded` oder `CF-Connecting-IP`), werden abgewiesen,
-solange keine Anmeldung eingerichtet ist. Ein vergessener Tunnel legt das Dashboard also
-nicht offen.
+Das Dashboard hat ab Werk keine Anmeldung und ist fürs Heimnetz gedacht. Ohne Anmeldung
+beantwortet es nur direkte Anfragen von lokalen Adressen. Abgewiesen werden Anfragen von
+öffentlichen Adressen (Portfreigabe, Rechner mit öffentlicher Adresse) und Anfragen, die
+über einen Reverse Proxy oder Tunnel kommen (erkennbar an `X-Forwarded-For`, `X-Real-IP`,
+`Forwarded`, `CF-Connecting-IP` oder `Via`). Ein Proxy, der keine dieser Kopfzeilen
+schickt, sieht aus wie eine direkte Anfrage; läuft er auf einem anderen Rechner, gehört
+er in `trusted_proxies`. Bitte keinen Port am Router freigeben.
+
+Egal welcher Weg: den öffentlichen Hostnamen in `allowed_hosts` eintragen, zum Beispiel
+`"allowed_hosts": ["pv.example.org"]`. Unbekannte Hostnamen weist das Dashboard ab (421),
+das schützt vor DNS-Rebinding über Webseiten, die im Heimnetz geöffnet werden.
 
 Für unterwegs gibt es drei Wege:
 
@@ -111,7 +134,11 @@ Für unterwegs gibt es drei Wege:
   Anmeldung, auch daheim. Sollen Geräte im Heimnetz ohne auskommen, `lan_without_login` auf
   `true` setzen. Die Ausnahme gilt nur für direkte Verbindungen von anderen Geräten, nie für
   Anfragen vom selben Rechner oder über einen Proxy. Läuft der Proxy auf einem anderen
-  Rechner und schickt kein `X-Forwarded-For`, `lan_without_login` aus lassen.
+  Rechner und schickt kein `X-Forwarded-For`, seine Adresse in `trusted_proxies`
+  eintragen. Hinter Source-NAT oder in einem Container mit User-Mode-Netzwerk (rootless
+  Docker oder Podman) erscheinen alle Besucher mit einer privaten Adresse; dort
+  `lan_without_login` aus lassen. Der eingebaute Server spricht nur HTTP, die Anmeldung ist
+  also nur durch das HTTPS des Proxys geschützt.
 - **Cloudflare Tunnel mit Cloudflare Access.** Für den Hostnamen eine Access-Anwendung
   anlegen und Team-Domain sowie den AUD-Tag der Anwendung eintragen (in den Einstellungen
   der Access-Anwendung als *Application Audience (AUD) Tag*):

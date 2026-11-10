@@ -17,7 +17,9 @@ to see what your system is doing. sungrow-local does exactly that and nothing mo
 - **One Python file**, standard library only, Python 3.8 or newer. Runs on an old Mac,
   a Raspberry Pi, a NAS or any Linux box.
 - **Read-only.** It never writes a Modbus register, so it cannot change a setting of your
-  inverter.
+  inverter. That describes this program, not the port it needs: Modbus TCP on the WiNet-S
+  has no login, so shield the dongle from the rest of your network, see
+  [Lock down the WiNet-S](docs/block-cloud.md#lock-down-the-winet-s).
 - **Live view** with animated energy flows between roof, battery, house and grid.
 - **History** for the day (5-minute curve) and per week, month and year.
 - **Energy balance** for today and in total: produced, direct use, from battery, exported,
@@ -85,9 +87,26 @@ All settings live in `config.json`. Everything you leave out keeps its default.
 | `request_pause` | `0.35` | pause between Modbus requests, see below |
 | `keep_days` | `400` | how long the minute values are kept |
 | `database` | `sungrow-local.db` | SQLite file for the history |
-| `basic_auth` | `null` | `"user:password"` to require a login |
+| `basic_auth` | `null` | `"user:password"` (password at least 8 characters) or a hashed login, see below |
 | `lan_without_login` | `false` | with `basic_auth`: other devices in the LAN that connect directly need no login |
 | `cloudflare_access` | `null` | team domain and AUD tag of a Cloudflare Access application, see "Access from outside" |
+| `allowed_hosts` | `[]` | host names the dashboard answers to besides IP addresses, `localhost` and the machine's own name; needed for a reverse proxy or tunnel |
+| `trusted_proxies` | `[]` | addresses or networks (`"192.168.1.5"`, `"10.0.0.0/24"`) whose connections always count as coming through a proxy |
+
+The settings are checked at start. A misspelled key, a value of the wrong type (`"false"`
+in quotes, `"8787"` as text) or a too short password stops the program with a message that
+names the setting. Keys that start with `_` are ignored and can serve as comments.
+
+**Hashed password.** Instead of the password in clear text, `config.json` can hold a hash:
+
+```sh
+python3 sungrow_local.py --hash-password
+```
+
+asks for user name and password and prints a line like
+`"basic_auth": {"user": "you", "pbkdf2_sha256": "200000$…$…"}` to paste into `config.json`.
+Either way, if `config.json` holds a login, make it readable only for you:
+`chmod 600 config.json`.
 
 ## API
 
@@ -95,7 +114,7 @@ The dashboard is built on a small JSON API that you can use for your own tools:
 
 | Endpoint | Content |
 |---|---|
-| `/api/now` | current powers, state of charge and today's and total energy counters |
+| `/api/now` | current powers, state of charge and today's and total energy counters; `age` in seconds; HTTP 503 with `error` (`unreachable`, `timeout`, `protocol`, `implausible`, `stale`) when there is no current reading |
 | `/api/day?offset=0` | today's curve in 5-minute steps, `offset=1` for yesterday |
 | `/api/days` | one row per day: date, produced, direct, charged, discharged, imported, exported (kWh) |
 | `/api/config` | plant name, peak power, tariff, currency, language |
@@ -112,14 +131,23 @@ The dashboard is built on a small JSON API that you can use for your own tools:
   is therefore calculated as PV + battery + grid.
 - Daily values come from the inverter's own counters and are stored from the day you start
   sungrow-local. Older history is only in the cloud.
+- Readings with impossible values (a state of charge above 100 %, a PV power far above the
+  peak power) are not stored, and the dashboard shows the connection as lost when no
+  reading has come in for three polling intervals.
 
 ## Access from outside
 
-The dashboard has no login by default and is meant for your home network. Do not forward
-the port on your router. Requests that arrive through a reverse proxy or a tunnel
-(recognised by `X-Forwarded-For`, `X-Real-IP`, `Forwarded` or `CF-Connecting-IP`) are
-refused as long as no login is configured, so a forgotten tunnel does not expose the
-dashboard.
+The dashboard has no login by default and is meant for your home network. Without a login
+it only answers direct requests from local addresses. Requests from public addresses (a
+port forward, a machine with a public address) and requests that arrive through a reverse
+proxy or a tunnel (recognised by `X-Forwarded-For`, `X-Real-IP`, `Forwarded`,
+`CF-Connecting-IP` or `Via`) are refused. A proxy that sends none of these headers looks
+like a direct request, so list it in `trusted_proxies` if it runs on another machine.
+Do not forward the port on your router.
+
+Whatever way you choose, add the public host name to `allowed_hosts`, for example
+`"allowed_hosts": ["pv.example.org"]`. The dashboard refuses unknown host names (421),
+which protects it against DNS rebinding through web pages opened in your network.
 
 For access on the road there are three ways:
 
@@ -129,7 +157,10 @@ For access on the road there are three ways:
   devices in your LAN may skip it, set `lan_without_login` to `true`. That exception only
   applies to direct connections from other devices, never to requests from the same
   machine or through a proxy. If your proxy runs on another machine and does not send
-  `X-Forwarded-For`, leave `lan_without_login` off.
+  `X-Forwarded-For`, put its address into `trusted_proxies`. Behind source NAT or in a
+  container with user-mode networking (rootless Docker or Podman) every client appears
+  with one private address; leave `lan_without_login` off there. The built-in server
+  speaks plain HTTP, so the login is only protected by the HTTPS of your proxy.
 - **Cloudflare Tunnel with Cloudflare Access.** Create an Access application for the
   hostname and enter your team domain and the application's AUD tag (shown as
   *Application Audience (AUD) Tag* in the settings of the Access application):
@@ -144,6 +175,15 @@ For access on the road there are three ways:
   list, if several Access applications lead to the same dashboard.
 
 Details on how requests are checked and how to report a problem: [SECURITY.md](SECURITY.md).
+
+## Tests
+
+```sh
+python3 -m unittest discover -s tests -t .
+```
+
+Standard library only, like the program. They run on every push on Python 3.8 and the
+current release.
 
 ## Blocking the cloud
 
