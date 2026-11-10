@@ -19,5 +19,7 @@
 
   "basic_auth": null,
   "lan_without_login": false,
-  "cloudflare_access": null
+  "cloudflare_access": null,
+  "allowed_hosts": [],
+  "trusted_proxies": []
 }

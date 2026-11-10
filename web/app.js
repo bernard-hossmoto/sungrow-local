@@ -52,8 +52,9 @@ const t = (k, vars) => { let s = L[k] != null ? L[k] : k; for (const v in vars |
 const num = (v, d = 1) => Number(v).toLocaleString(CFG.language === "de" ? "de-AT" : "en-GB",
   { minimumFractionDigits: d, maximumFractionDigits: d });
 const W = v => Math.abs(v) >= 1000 ? num(v / 1000, 2) + " kW" : Math.round(v) + " W";
-const money = v => CFG.language === "de" ? num(v, 2) + " " + CFG.currency : CFG.currency + num(v, 2);
-window.APP = { t, num, W, money, get cfg() { return CFG; }, get lang() { return L; } };
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const money = v => CFG.language === "de" ? num(v, 2) + " " + esc(CFG.currency) : esc(CFG.currency) + num(v, 2);
+window.APP = { t, num, W, money, esc, get cfg() { return CFG; }, get lang() { return L; } };
 
 function applyLanguage() {
   L = I18N[CFG.language] || I18N.en;
