@@ -25,6 +25,13 @@ Der WiNet-S kann per WLAN oder per Netzwerkkabel ins Netz.
 
 Ab Werk ist Port 502 am WiNet-S zu. Es gibt zwei Wege, ihn zu öffnen.
 
+> **Zuerst lesen.** Modbus TCP kennt keine Anmeldung. Ist Port 502 offen, kann *jedes*
+> Gerät, das den Dongle erreicht, den Wechselrichter auslesen, und man muss davon ausgehen,
+> dass es auch Einstellungen schreiben kann (Speichermodus, Zwangsladung, Einspeisegrenze).
+> sungrow-local selbst liest nur, kann den Port, den es braucht, aber nicht schützen. Den
+> WiNet-S deshalb in ein Netzsegment stellen, in dem nur der Rechner mit sungrow-local Port
+> 502 erreicht, siehe [WiNet-S abschotten](block-cloud.de.md#winet-s-abschotten).
+
 ### Weg A: iSolarCloud-App
 
 1. In der iSolarCloud-App die Anlage öffnen.
@@ -48,7 +55,8 @@ Installateur bitten, es einzuschalten.
    Die Taste nicht lange halten, ein langer Druck kann den Dongle zurücksetzen.
 2. Mit diesem WLAN verbinden und `http://11.11.11.1` im Browser öffnen.
 3. Mit dem Admin-Konto anmelden. Das Standardpasswort steht im WiNet-S-Handbuch von
-   Sungrow; mit dem "user"-Zugang sieht man die Modbus-Einstellungen nicht.
+   Sungrow; mit dem "user"-Zugang sieht man die Modbus-Einstellungen nicht. **Das
+   Standardpasswort gleich ändern:** Diese Weboberfläche bleibt aus dem Heimnetz erreichbar.
 4. **System → Transfer Configuration**, dort bei Modbus TCP den **Local Port**
    einschalten und speichern.
 
@@ -66,6 +74,7 @@ ob der Port offen ist. Die Modbus-**Unit-ID ist 1**.
 | Meldung | Ursache und Abhilfe |
 |---|---|
 | `ConnectionRefusedError` | Modbus TCP ist nicht eingeschaltet, oder die IP-Adresse stimmt nicht. |
+| `ReadTimeout` oder `timeout` | Der Dongle antwortet zu langsam oder gar nicht. Kabel oder WLAN prüfen, und ob nicht ein anderes Modbus-Programm verbunden ist. |
 | `ConnectionResetError` oder "connection closed by inverter" | Ein anderes Modbus-Programm hängt gleichzeitig am Dongle (Home Assistant, evcc, eine zweite sungrow-local-Instanz), oder die Anfragen kommen zu schnell. Das andere Programm stoppen oder `request_pause` auf 0,5 erhöhen. |
 | `Modbus exception 2` | Das Modell nutzt andere Register. Bitte ein Issue mit Modell und Firmwarestand anlegen. |
 | Tageswerte springen um Mitternacht | Die Zähler werden um Mitternacht nach der Uhr des Wechselrichters zurückgesetzt. Geht die Uhr falsch, stimmt auch die Tagesgrenze nicht. Siehe [block-cloud.de.md](block-cloud.de.md). |
