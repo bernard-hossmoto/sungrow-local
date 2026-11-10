@@ -60,7 +60,10 @@ Every request, whatever the method, passes one check before it is handled. In th
    of its own addresses), through a proxy or from `trusted_proxies` never count as LAN.
 4. **Login.** Otherwise a valid `basic_auth` login is required, compared in constant time
    (or checked against a PBKDF2 hash). Failed logins are logged. Ten failures within five
-   minutes block that client for a minute (429).
+   minutes block that client for a minute (429). A forwarded client address counts only
+   when the connection comes from this machine or from `trusted_proxies`. Thirty failures
+   within a minute from all clients together block every login that is not already known
+   to be good, for a minute.
 
 What these rules cannot see: a proxy that adds none of the forwarding headers and connects
 from another machine in the LAN looks like a direct request from that machine. Put such a
@@ -70,8 +73,8 @@ address: do not use `lan_without_login` there.
 
 Every response carries `Content-Security-Policy`, `X-Content-Type-Options`,
 `X-Frame-Options` and `Referrer-Policy` headers. The server does not reveal its Python
-version, idle connections are closed after 15 seconds, and at most 32 connections are
-handled at the same time.
+version, a request must be complete within 15 seconds (however slowly it is sent), and at
+most 32 connections are handled at the same time, at most 8 from one address.
 
 ## Fixed in this repository
 
@@ -106,3 +109,14 @@ Found in an external security review on 2026-11-10, fixed in version 0.2.0:
   lockout for failed logins, security headers, escaped currency symbol, short error codes
   in the API, sandboxed systemd unit with its own user, documentation on shielding the
   Modbus port.
+
+Found in a follow-up review of 0.2.0 on 2026-11-10, fixed in version 0.2.1:
+
+- **Lockout bypass with made-up forwarding headers** (low to medium). The lockout key
+  included `X-Real-IP` and similar headers from any client, so a new value per request
+  gave a fresh counter. Forwarded addresses now count only from this machine or
+  `trusted_proxies`, and a global limit bounds failed logins (and the PBKDF2 load).
+- **Slowly sending clients** (low). The 15 second timeout applied per read, so 32 clients
+  sending one byte every few seconds held every slot. The request now has one deadline,
+  and one address gets at most 8 of the 32 connections.
+- `Host` values with `@`, `/`, spaces or commas are refused.

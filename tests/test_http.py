@@ -73,6 +73,53 @@ class Open(unittest.TestCase):
         s.close()
 
 
+class SlowSenders(unittest.TestCase):
+    def setUp(self):
+        self.s = RunningServer()             # request deadline 2 s in the tests
+
+    def tearDown(self):
+        self.s.close()
+
+    def test_dripping_request_is_closed_at_the_deadline(self):
+        c = socket.create_connection(("127.0.0.1", self.s.port))
+        c.settimeout(10)
+        began = time.time()
+        closed = False
+        try:
+            c.sendall(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n")
+            for _ in range(20):
+                c.sendall(b"X")
+                time.sleep(0.4)
+        except OSError:
+            closed = True
+        if not closed:
+            closed = c.recv(100) == b""
+        c.close()
+        self.assertTrue(closed)
+        self.assertLess(time.time() - began, 6)
+
+    def test_one_client_cannot_take_every_slot(self):
+        try:
+            probe = socket.socket()
+            probe.bind(("127.0.0.2", 0))
+            probe.close()
+        except OSError:
+            self.skipTest("no second loopback address on this system")
+        slow = []
+        for _ in range(40):
+            c = socket.create_connection(("127.0.0.1", self.s.port))
+            c.sendall(b"GET / HTTP/1.1\r\n")
+            slow.append(c)
+        time.sleep(0.3)
+        other = socket.create_connection(("127.0.0.1", self.s.port), source_address=("127.0.0.2", 0))
+        other.sendall(b"GET /api/now HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
+        other.settimeout(5)
+        self.assertTrue(other.recv(100).startswith(b"HTTP/1.0 200"))
+        other.close()
+        for c in slow:
+            c.close()
+
+
 class Login(unittest.TestCase):
     def setUp(self):
         self.s = RunningServer(basic_auth="owner:correct horse")

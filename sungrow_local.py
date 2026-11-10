@@ -14,7 +14,7 @@ Standard library only, Python 3.8 or newer. The program never writes a register.
 import argparse, base64, difflib, getpass, hashlib, hmac, http.server, ipaddress, json, math, os
 import random, socket, socketserver, sqlite3, struct, sys, threading, time, urllib.parse, urllib.request
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(HERE, "web")
@@ -700,6 +700,8 @@ def own_addresses(http_host=None):
 def split_host(value):
     """Host part of a Host header, lower case, without port and brackets."""
     v = value.strip().lower()
+    if any(c in v for c in "@/\\ \t,"):
+        return ""                                # userinfo, paths or lists are never a valid Host
     if v.startswith("["):
         return v[1:v.find("]")] if "]" in v else v
     if v.count(":") == 1:
@@ -725,6 +727,8 @@ class Gate(object):
         self.ok_cache = {}          # sha256 of good Authorization headers
         self.failures = {}          # client key -> [timestamps of failed logins]
         self.locked = {}            # client key -> locked until
+        self.recent = []            # times of failed logins from all clients
+        self.all_locked = 0.0       # all logins without a cached good one are refused until then
         self.noted = {}             # log key -> last time logged
 
     # -- helpers
@@ -754,11 +758,31 @@ class Gate(object):
         ip = parse_ip(client_ip)
         return ip is not None and str(ip) in self.own
 
-    @staticmethod
-    def client_key(client_ip, headers):
+    def speaks_for_others(self, client_ip):
+        """Only a proxy on this machine or in trusted_proxies may name the real client."""
+        ip = parse_ip(client_ip)
+        if ip is None:
+            return False
+        return ip.is_loopback or str(ip) in self.own or any(ip in n for n in self.proxies)
+
+    def client_key(self, client_ip, headers):
+        """Key for the lockout and the log. The forwarded address counts only when the
+        connection comes from a proxy that may speak for others, and only if it is one
+        clean IP address, so a client cannot get a fresh counter by inventing headers."""
+        if not self.speaks_for_others(client_ip):
+            return str(client_ip)
         fwd = headers.get("CF-Connecting-IP") or headers.get("X-Real-IP") or \
-            (headers.get("X-Forwarded-For") or "").split(",")[-1].strip()
-        return "%s|%s" % (client_ip, fwd or "")
+            (headers.get("X-Forwarded-For") or "").split(",")[-1]
+        fwd = (fwd or "").strip()[:45]
+        ip = parse_ip(fwd) if fwd else None
+        return "%s|%s" % (client_ip, ip) if ip is not None else str(client_ip)
+
+    def cached(self, header):
+        if not header:
+            return False
+        fp = hashlib.sha256(header.encode("latin-1", "replace")).digest()
+        with self.lock:
+            return fp in self.ok_cache
 
     def login_ok(self, header):
         if not header or not header.startswith("Basic "):
@@ -799,6 +823,10 @@ class Gate(object):
     def failed(self, key):
         now = time.time()
         with self.lock:
+            self.recent = [t for t in self.recent if t > now - 60] + [now]
+            if len(self.recent) >= 30:              # many failures from everywhere: slow all down
+                self.all_locked = now + 60
+                self.recent = []
             hits = [t for t in self.failures.pop(key, []) if t > now - 300] + [now]
             self.failures[key] = hits
             while len(self.failures) > 1000:
@@ -833,7 +861,8 @@ class Gate(object):
         3. lan_without_login lets in direct requests from other devices in the LAN, never from
            this machine itself, loopback or a proxy.
         4. Otherwise a valid basic_auth login is required. Ten failures within five minutes
-           block that client for a minute."""
+           block that client for a minute, thirty failures within a minute from all clients
+           together block every login that is not already known to be good."""
         if not self.host_ok(headers.get("Host"), http10):
             return (400, "missing Host header") if headers.get("Host") is None else (421, "unknown host name")
         proxied = self.proxied(client_ip, headers)
@@ -850,9 +879,9 @@ class Gate(object):
                 and not self.own_address(client_ip):
             return 200, "lan without login"
         key = self.client_key(client_ip, headers)
-        if self.is_locked(key):
-            return 429, "too many failed logins"
         auth = headers.get("Authorization")
+        if self.is_locked(key) or (self.all_locked > time.time() and not self.cached(auth)):
+            return 429, "too many failed logins"
         if self.login_ok(auth):
             return 200, "login"
         if auth:
@@ -880,10 +909,28 @@ def make_handler(cfg, store, collector, gate):
     class Handler(http.server.SimpleHTTPRequestHandler):
         server_version = "sungrow-local"
         sys_version = ""
-        timeout = 15                    # seconds for a client to send its request
+        timeout = 15                    # seconds for a client to send its whole request
 
         def version_string(self):
             return self.server_version
+
+        def setup(self):
+            http.server.SimpleHTTPRequestHandler.setup(self)
+            # one deadline for request line and headers together: a client that sends one
+            # byte every few seconds would otherwise never hit the per-read timeout
+            self.deadline = threading.Timer(self.timeout, self._expire)
+            self.deadline.daemon = True
+            self.deadline.start()
+
+        def _expire(self):
+            try:
+                self.connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+        def finish(self):
+            self.deadline.cancel()
+            http.server.SimpleHTTPRequestHandler.finish(self)
 
         def __init__(self, *a, **kw):
             http.server.SimpleHTTPRequestHandler.__init__(self, *a, directory=WEB, **kw)
@@ -916,7 +963,9 @@ def make_handler(cfg, store, collector, gate):
 
         # every request, whatever the method, passes through here before it is handled
         def parse_request(self):
-            if not http.server.SimpleHTTPRequestHandler.parse_request(self):
+            ok = http.server.SimpleHTTPRequestHandler.parse_request(self)
+            self.deadline.cancel()          # the request is in, the deadline has done its job
+            if not ok:
                 return False
             client = self.client_address[0]
             try:
@@ -988,19 +1037,39 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
     allow_reuse_address = True
     request_queue_size = 16
     max_connections = 32
+    per_client = 8                  # so that one device cannot take every slot
 
     def __init__(self, *a, **kw):
         self.slots = threading.BoundedSemaphore(self.max_connections)
+        self.counts, self.count_lock = {}, threading.Lock()
         http.server.HTTPServer.__init__(self, *a, **kw)
 
+    def _leave(self, addr):
+        with self.count_lock:
+            n = self.counts.get(addr, 1) - 1
+            if n > 0:
+                self.counts[addr] = n
+            else:
+                self.counts.pop(addr, None)
+
     def process_request(self, request, client_address):
+        addr = client_address[0]
+        with self.count_lock:
+            busy = self.counts.get(addr, 0) >= self.per_client
+            if not busy:
+                self.counts[addr] = self.counts.get(addr, 0) + 1
+        if busy:
+            self.shutdown_request(request)       # this client already has its share
+            return
         if not self.slots.acquire(blocking=False):
+            self._leave(addr)
             self.shutdown_request(request)       # all slots busy: close at once
             return
         try:
             socketserver.ThreadingMixIn.process_request(self, request, client_address)
         except Exception:
             self.slots.release()
+            self._leave(addr)
             raise
 
     def process_request_thread(self, request, client_address):
@@ -1008,6 +1077,7 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
             socketserver.ThreadingMixIn.process_request_thread(self, request, client_address)
         finally:
             self.slots.release()
+            self._leave(client_address[0])
 
     def handle_error(self, request, client_address):
         e = sys.exc_info()[1]

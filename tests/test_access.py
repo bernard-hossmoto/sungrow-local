@@ -97,6 +97,30 @@ class AccessTable(unittest.TestCase):
         self.assertEqual(g.decide(LAN, headers(Host=HOST, Authorization=BAD))[0], 401)
         self.assertEqual(g.decide(LAN, headers(Host=HOST, Authorization=basic("other", "correct horse")))[0], 401)
 
+    def test_made_up_forwarding_headers_do_not_reset_the_counter(self):
+        g = gate("login")
+        codes = [g.decide(PUBLIC, headers(Host=HOST, Authorization=BAD, X_Real_IP="10.9.9.%d" % i,
+                                          X_Forwarded_For="10.8.8.%d" % i))[0] for i in range(12)]
+        self.assertEqual(codes[:10], [401] * 10)
+        self.assertEqual(codes[10:], [429, 429])
+
+    def test_trusted_proxy_counts_per_forwarded_client(self):
+        g = gate("login", trusted_proxies=["10.0.0.5"])
+        for _ in range(10):
+            g.decide("10.0.0.5", headers(Host=HOST, Authorization=BAD, X_Forwarded_For="8.8.4.4"))
+        self.assertEqual(g.decide("10.0.0.5", headers(Host=HOST, Authorization=GOOD, X_Forwarded_For="8.8.4.4"))[0], 429)
+        self.assertEqual(g.decide("10.0.0.5", headers(Host=HOST, Authorization=GOOD, X_Forwarded_For="1.1.1.1"))[0], 200)
+        self.assertEqual(g.client_key("10.0.0.5", headers(X_Forwarded_For="garbage<script>")), "10.0.0.5")
+
+    def test_many_failures_from_everywhere_slow_all_logins_down(self):
+        g = gate("login")
+        self.assertEqual(g.decide(LAN, headers(Host=HOST, Authorization=GOOD))[0], 200)     # now cached
+        for i in range(30):
+            g.decide("8.8.%d.%d" % (i // 200, i % 200), headers(Host=HOST, Authorization=BAD))
+        self.assertEqual(g.decide("9.9.9.9", headers(Host=HOST, Authorization=BAD))[0], 429)
+        self.assertEqual(g.decide("9.9.9.9", headers(Host=HOST, Authorization=basic("owner", "x" * 9)))[0], 429)
+        self.assertEqual(g.decide(LAN, headers(Host=HOST, Authorization=GOOD))[0], 200)     # known good login
+
     def test_lockout_after_ten_failures(self):
         g = gate("login")
         for _ in range(10):
@@ -111,7 +135,7 @@ class HostHeader(unittest.TestCase):
     ACCEPTED = ["192.168.1.10:8787", "192.168.1.10", "localhost:8787", "LOCALHOST", "[::1]:8787", "[fe80::1]",
                 "dash", "dash:8787", "dash.local:8787", "pv.example.org", "PV.Example.Org.:443"]
     REFUSED = ["attacker.example", "attacker.example:8787", "dash.attacker.example", "192.168.1.10.nip.io",
-               "localhost.attacker.example", ""]
+               "localhost.attacker.example", "", "127.0.0.1:8787@evil.com", "192.168.1.10/x", "dash, evil"]
 
     def test_hosts(self):
         for mode in ("open", "login", "login+lan"):
