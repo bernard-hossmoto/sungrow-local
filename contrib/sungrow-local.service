@@ -1,3 +1,10 @@
+# sungrow-local as a system service, see docs/run-as-service.md
+#
+# Layout: code in /opt/sungrow-local (owned by root), configuration in
+# /etc/sungrow-local/config.json (root:sungrow-local, mode 640), database in
+# /var/lib/sungrow-local (created by systemd). In config.json set
+#   "database": "/var/lib/sungrow-local/sungrow-local.db"
+
 [Unit]
 Description=sungrow-local, local dashboard for Sungrow SH inverters
 After=network-online.target
@@ -5,11 +12,37 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/opt/sungrow-local
-ExecStart=/usr/bin/python3 /opt/sungrow-local/sungrow_local.py --config /opt/sungrow-local/config.json
+User=sungrow-local
+Group=sungrow-local
+StateDirectory=sungrow-local
+WorkingDirectory=/var/lib/sungrow-local
+ExecStart=/usr/bin/python3 /opt/sungrow-local/sungrow_local.py --config /etc/sungrow-local/config.json
 Restart=on-failure
 RestartSec=20
+
+# sandbox: the service can read its code and config, write only its state directory
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

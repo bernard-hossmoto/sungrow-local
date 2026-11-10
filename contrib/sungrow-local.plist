@@ -14,7 +14,7 @@
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>20</integer>
-  <key>StandardOutPath</key><string>/Users/YOURNAME/sungrow-local/sungrow-local.log</string>
-  <key>StandardErrorPath</key><string>/Users/YOURNAME/sungrow-local/sungrow-local.log</string>
+  <key>StandardOutPath</key><string>/Users/YOURNAME/Library/Logs/sungrow-local.log</string>
+  <key>StandardErrorPath</key><string>/Users/YOURNAME/Library/Logs/sungrow-local.log</string>
 </dict>
 </plist>
